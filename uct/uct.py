@@ -6,8 +6,21 @@ import chess
 from collections import OrderedDict
 import functools
 
+def apply_temp(policy, temp):
+    """Apply a temperature to an already softmaxed policy"""
+    values = np.fromiter(policy.values(), dtype=np.float)
+    values = values**(1/temp)
+    values = values/values.sum()
+    for i, k in list(enumerate(policy)):
+        policy[k] = values[i]
+
 class UCTNode():
-    def __init__(self, board=None, parent=None, move=None, prior=0):
+    def __init__(self, board=None, parent=None, move=None, prior=0, is_root=False, alt=False):
+        if parent:
+            self.alt = parent.alt
+        else:
+            self.alt = alt
+        self.is_root = is_root
         self.board = board
         self.move = move
         self.is_expanded = False
@@ -26,6 +39,12 @@ class UCTNode():
     def U(self):  # returns float
         return (math.sqrt(self.parent.number_visits)
                 * self.prior / (1 + self.number_visits))
+#         if self.parent.is_root and self.alt:
+#             scaled_parent_visits = (self.parent.number_visits)**0.75 
+#             return (scaled_parent_visits * self.prior / (1 + self.number_visits))            
+#         else:
+#             return (math.sqrt(self.parent.number_visits)
+#                     * self.prior / (1 + self.number_visits))
 
     def best_child(self, C):
         return max(self.children.values(),
@@ -52,12 +71,15 @@ class UCTNode():
         current = self
         # Child nodes are multiplied by -1 because we want max(-opponent eval)
         turnfactor = -1
-        while current.parent is not None:            
+        while True:            
             current.number_visits += 1
             current.total_value += (value_estimate *
                                     turnfactor)
-            current = current.parent
-            turnfactor *= -1
+            if current.parent:
+                current = current.parent
+                turnfactor *= -1
+            else:
+                break
         current.number_visits += 1
 
     def dump(self, move, C):
@@ -73,18 +95,22 @@ class UCTNode():
         #      self.prior, self.number_visits))
         print("---")
 
-def UCT_search(board, num_reads, net=None, C=1.0):
+def UCT_search(board, num_reads, net=None, C=1.0, alt=False):
     assert(net != None)
-    root = UCTNode(board)
+    root = UCTNode(board, prior=1, is_root=True, alt=alt)
     for _ in range(num_reads):
         leaf = root.select_leaf(C)
         child_priors, value_estimate = net.evaluate(leaf.board)
+        if alt and child_priors:
+            apply_temp(child_priors, 2.2)
         leaf.expand(child_priors)
         leaf.backup(value_estimate)
 
     #for m, node in sorted(root.children.items(),
     #                      key=lambda item: (item[1].number_visits, item[1].Q())):
     #    node.dump(m, C)
+    # Need to make this negative as we're actually trying to maximize children Q values
+    print("Root Q = {}".format(-root.Q()))
     return max(root.children.items(),
                key=lambda item: (item[1].number_visits, item[1].Q()))
 
