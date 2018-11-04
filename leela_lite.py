@@ -8,7 +8,7 @@ import time
 
 
 if len(sys.argv) != 3:
-    print("Usage: python3 leela_lite.py <weights file> <nodes>")
+    print("Usage: python3 leela_lite.py <weights file or network server ID> <nodes>")
     print(len(sys.argv))
     exit(1)
 else:
@@ -19,7 +19,16 @@ else:
 
 
 # net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=2.2)
-net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=1.0)
+# net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=1.0)
+network_id = None
+try:
+    network_id = int(weights)
+except:
+    pass
+if network_id is not None:
+    net = load_network(backend='net_client', network_id=network_id)
+else:
+    net = load_network(backend='pytorch_cuda', filename=weights)
 nn = uct.NeuralNet(net=net)
 #policy, value = net.evaluate(board)
 #print(policy)
