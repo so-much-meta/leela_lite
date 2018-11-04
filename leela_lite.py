@@ -18,8 +18,17 @@ else:
 
 
 # net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=2.2)
-net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=1.0)
-nn = uct.NeuralNet(net=net)
+# net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=1.0)
+network_id = None
+try:
+    network_id = int(weights)
+except:
+    pass
+if network_id is not None:
+    net = load_network(backend='net_client', network_id=network_id)
+else:
+    net = load_network(backend='pytorch_cuda', filename=weights)
+nn = uct.NeuralNet(net=net, lru_size=0)
 #policy, value = net.evaluate(board)
 #print(policy)
 #print(value)
@@ -42,7 +51,7 @@ sampled_moves, sampled_probs = zip(*sampled_items)
 reg_score = ''
 alt_score = ''
 
-with open('results.txt', 'w') as f:
+with open('/dev/null', 'w') as f:
     for seq_idx, seq in enumerate(sampled_moves, 1):
         for alt_color in (chess.WHITE, chess.BLACK):
             board = LeelaBoard()
@@ -64,10 +73,10 @@ with open('results.txt', 'w') as f:
                 start = time.time()
                 if alt_color == board.turn:
                     print("ALT...")
-                    best, node = uct.UCT_search(board, nodes, net=nn, C=3.4, alt=True)
+                    best, node = uct.UCT_search(board, nodes, net=nn, C=2.4, alt=True)
                 else:
                     print("REG...")
-                    best, node = uct.UCT_search(board, nodes, net=nn, C=3.4, alt=False)
+                    best, node = uct.UCT_search(board, nodes, net=nn, C=2.4, alt=False)
                 elapsed = time.time() - start
                 print("best: ", best)
                 print("Time: {:.3f} nps".format(nodes/elapsed))

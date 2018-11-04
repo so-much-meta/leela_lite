@@ -37,14 +37,14 @@ class UCTNode():
             return self.total_value / self.number_visits
 
     def U(self):  # returns float
-        return (math.sqrt(self.parent.number_visits)
-                * self.prior / (1 + self.number_visits))
-#         if self.parent.is_root and self.alt:
-#             scaled_parent_visits = (self.parent.number_visits)**0.75 
-#             return (scaled_parent_visits * self.prior / (1 + self.number_visits))            
-#         else:
-#             return (math.sqrt(self.parent.number_visits)
-#                     * self.prior / (1 + self.number_visits))
+        # return (math.sqrt(self.parent.number_visits)
+        #        * self.prior / (1 + self.number_visits))
+        if self.alt:
+            scaled_parent_visits = (self.parent.number_visits)**0.4
+            return (scaled_parent_visits * self.prior / (1 + self.number_visits))            
+        else:
+            return (math.sqrt(self.parent.number_visits)
+                    * self.prior / (1 + self.number_visits))
 
     def best_child(self, C):
         return max(self.children.values(),
@@ -101,8 +101,6 @@ def UCT_search(board, num_reads, net=None, C=1.0, alt=False):
     for _ in range(num_reads):
         leaf = root.select_leaf(C)
         child_priors, value_estimate = net.evaluate(leaf.board)
-        if alt and child_priors:
-            apply_temp(child_priors, 2.2)
         leaf.expand(child_priors)
         leaf.backup(value_estimate)
 
