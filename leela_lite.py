@@ -1,5 +1,6 @@
+#!/usr/bin/python3
 from lcztools import load_network, LeelaBoard
-import uct
+import search
 import chess
 import chess.pgn
 import sys
