@@ -26,9 +26,9 @@ except:
 def load_leela_network():
     global net, nn
     if network_id is not None:
-        net = load_network(backend='net_client', network_id=network_id)
+        net = load_network(backend='net_client', network_id=network_id, policy_softmax_temp=2.2)
     else:
-        net = load_network(backend='pytorch_cuda', filename=weights)
+        net = load_network(backend='pytorch_cuda', filename=weights, policy_softmax_temp=2.2)
     nn = search.NeuralNet(net=net, lru_size=min(5000, nodes))
     
 
@@ -48,12 +48,13 @@ while True:
     print(board.unicode())
     print("thinking...")
     start = time.time()
-    best, node = search.UCT_search(board, nodes, net=nn, C=3.4)
+    root_q, node = search.UCT_search(board, nodes, net=nn,
+                                     params=search.uct.UCTParams(c_puct=3.4, c_fpu=1.2))
     elapsed = time.time() - start
-    print("best: ", best)
+    print("best: ", node.move)
     print("Time: {:.3f} nps".format(nodes/elapsed))
     print(nn.evaluate.cache_info())
-    board.push_uci(best)
+    board.push_uci(node.move)
     if board.pc_board.is_game_over() or board.is_draw():
         result = board.pc_board.result(claim_draw=True)
         print("Game over... result is {}".format(result))

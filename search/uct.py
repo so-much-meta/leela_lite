@@ -3,139 +3,195 @@ import math
 import lcztools
 from lcztools import LeelaBoard
 import chess
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 
-class UCTNode():
-    def __init__(self, board=None, parent=None, move=None, prior=0, is_root=False, root_remaining_playouts=None):
+UCTParams = namedtuple('UCTParams', 'c_puct c_fpu')
+
+class UCTNode:
+    def __init__(self, parent, move, prior, board=None):
         self.board = board
-        self.move = move
-        self.is_expanded = False
         self.parent = parent  # Optional[UCTNode]
-        self.children = OrderedDict()  # Dict[move, UCTNode]
+        self.move = move
         self.prior = prior  # float
-        self.total_value = 0  # float
+        self.children = [] # List of UCTNodes... OrderedDict()  # Dict[move, UCTNode]
+        self.total_value = 0  # float -- start as network 
         self.number_visits = 0  # int
-        self.is_root = is_root
-        self.root_remaining_playouts = root_remaining_playouts
-        self.root_max_n = 0  # Highest visits among children
-        self.root_best_child = None
+        # visited_policy is for calculating FPU reduction. It's the sum of policy values
+        # of visited children
+        self.visited_policy = 0
         
-    def Q(self):  # returns float
-        if not self.number_visits:
-            return -self.parent.total_value / self.parent.number_visits # - 1.2*math.sqrt(self.prior) # FPU reduction, parent value like lc0???
+    def get_board(self):
+        if not self.board:
+            self.board = self.parent.get_board().copy()
+            self.board.push_uci(self.move)
+        return self.board        
+            
+    def Q(self, child, params):  # returns float
+        c_fpu = params.c_fpu
+        if not child.number_visits:
+            return self.total_value / self.number_visits - c_fpu * math.sqrt(self.visited_policy) # FPU reduction, parent value like lc0???
         else:
-            return self.total_value / self.number_visits
+            return -child.total_value / child.number_visits
     
-    def U(self):  # returns float
-        if self.parent.number_visits == 1:
-            return self.prior / (1 + self.number_visits)
+    def U(self, child, params):  # returns float
+        c_puct = params.c_puct
+        if self.number_visits == 1:
+            return c_puct * child.prior / (1 + child.number_visits)
         else:
-            return math.sqrt(self.parent.number_visits - 1) * self.prior / (1 + self.number_visits)
+            return c_puct * math.sqrt(self.number_visits - 1) * child.prior / (1 + child.number_visits)
         
-    def best_child(self, C):
-        if self.is_root:
-            avail_children = [node for node in self.children.values() if self.root_remaining_playouts>=self.root_max_n - node.number_visits]
-            # If there's only one child to search, signal an early exit
-            if len(avail_children)==1:
-                # We don't really need this, but it matches what lc0 does... still does one extra node expansion for best node
-                return avail_children[0], True
-        else:
-            avail_children = self.children.values()
-        return max(avail_children,
-                   key=lambda node: node.Q() + C*node.U()), False
+    def uct_select(self, avail_children, params):
+        return max(avail_children, key=lambda node: self.Q(node, params) + self.U(node, params))
 
-    def select_leaf(self, C):
-        current = self
-        early_exit = False
-        while current.is_expanded and current.children:
-            # This is way more cumbersome than it neesd to be...
-            # The idea is only root can trigger an early exit, but even if there's
-            # an early exit, we still expand the best node if that's the one that's chosen
-            # Probably can simplify, but this is LC0's behavior
-            if current.is_root:
-                current, early_exit = current.best_child(C)
-                if early_exit:
-                    # we don't really need to check this, but it's what LC0 does
-                    if not current==self.root_best_child:
-                        return None, True                
-            else:
-                current, _ = current.best_child(C)
-        if not current.board:
-            current.board = current.parent.board.copy()
-            current.board.push_uci(current.move)
-        return current, early_exit
-
-    def expand(self, child_priors):
-        self.is_expanded = True
-        for move, prior in child_priors.items():
+    def expand_and_backup(self, priors, value, params):
+        """Given policy priors and a value, expand this node and backup values"""        
+        for move, prior in priors.items():
             self.add_child(move, prior)
-
-    def add_child(self, move, prior):
-        self.children[move] = UCTNode(parent=self, move=move, prior=prior)
-    
-    def backup(self, value_estimate: float):
-        current = self
-        # Child nodes are multiplied by -1 because we want max(-opponent eval)
+        self.total_value = value
+        self.number_visits = 1
+        child, current = self, self.parent
         turnfactor = -1
-        while True:            
-            current.number_visits += 1
-            current.total_value += (value_estimate *
-                                    turnfactor)
-            if not current.parent:
-                break
-            if current.parent.is_root:
-                root = current.parent
-                
-                if root.root_best_child is None:
-                    root.root_best_child = current
-                    root.root_max_n = current.number_visits
-                else:
-                    if root.root_max_n == current.number_visits:
-                        if root.root_best_child != current:
-                            if root.root_best_child.Q() < current.Q():
-                                root.root_best_child = current
-                    elif root.root_max_n < current.number_visits:
-                        root.root_max_n = current.number_visits
-                        root.root_best_child = current
-                    
-            current = current.parent
+        while current:
+            current.add_visit(child, value * turnfactor, params)
+            child, current = current, current.parent
             turnfactor *= -1
-        # We're at root, so reduce remianing playouts
-        current.root_remaining_playouts -= 1
-        # current.number_visits += 1
+            
+    def select_leaf(self, params):
+        """Recurse through tree to determine node to expand given cpuct
+        
+        In the case of root, ignore children that are not able to be max"""
+        current = self
+        while current and current.number_visits and current.children:
+            current = current.child_to_visit(params)
+            # None may be returned in case of early exit
+            if not current:
+                return None
+        return current            
+            
+    def add_visit(self, from_child, value, params):
+        """Add a visit to this node
+        
+        Default implementation for non-root-child nodes, which have to handle things
+        differently for early exiting"""
+        self.total_value += value
+        self.number_visits += 1
+        if from_child.number_visits == 1:
+            self.visited_policy += from_child.prior          
+    
+    def child_to_visit(self, params):
+        """Get child with highest Q + U given cpuct
+        
+        In the case of root node, ignore children that are not able to be max"""
+        return self.uct_select(self.children, params)
+    
+    
+    def add_child(self, move, prior):
+        """Add a child to the tree
+        
+        UCTRootNode ==> Add UCTRootChildNode
+        UCTRootChildNode ==> Add UCTInteriorNode
+        UCTInteriorNode ==> Add UCTInteriorNode"""
+        self.children.append(UCTNode(self, move, prior))
+    
+    def debug_string(self, params):
+        c_puct, c_fpu = params.c_puct, params.c_fpu
+        move = self.move if self.move else 'root'
+        n = self.number_visits
+        p = self.prior*100
+        q = self.parent.Q(self, params) if self.parent else self.Q(child=None, params=params)
+        u = self.parent.U(self, params) if self.parent else 0
+        q_u = q+u
+        result = "{:<5} N = {:6d}       P = {:7.3f}%   Q = {:8.5f}   U = {:8.5f}   Q+U = {:8.5f}".format(
+                    move, n, p, q, u, q_u
+                    )
+        return result
+    
+    def debug_children_string(self, params):
+        
+        children = sorted(self.children, key=lambda node: (node.number_visits, self.Q(node, params)+self.U(node, params)))
+        return '\n'.join(child.debug_string(params) for child in children)
+    
+    def dump(self, params):
+        print(self.debug_string(params))
+        print('----------------------------------------------------------------------------------')
+        print(self.debug_children_string(params))
+    
 
-    def dump(self, move, C):
-        print("---")
-        print("move: ", move)
-        print("total value: ", self.total_value)
-        print("visits: ", self.number_visits)
-        print("prior: ", self.prior)
-        print("Q: ", self.Q())
-        print("U: ", self.U())
-        print("BestMove: ", self.Q() + C * self.U())
-        #print("math.sqrt({}) * {} / (1 + {}))".format(self.parent.number_visits,
-        #      self.prior, self.number_visits))
-        print("---")
+class UCTRootNode(UCTNode):
+    def __init__(self, board, max_nodes_to_search):
+        super().__init__(parent=None, move=None, prior=1, board=board)
+        # num_visits is the number of total visits this node will search
+        self.max_nodes_to_search = max_nodes_to_search
+        self.max_child_visits = 0
+        # The "best child" is the child with the highest visit count,
+        # - in case of a tie, select highest Q 
+        self.best_child = None
+        # Signal if we shouldn't search anymore because there is no way to beat the best
+        # child
+        self.early_stop = False
+        
+    def Q(self, child, params):
+        # If child is none, just get the average value at root
+        if child is None:
+            return self.total_value / self.number_visits
+        else:
+            return super().Q(child, params)
+   
+            
+    def child_to_visit(self, params):
+        """Get child with best Q + U given cpuct
+        
+        In the case of root node, ignore children that are not able to be max"""
+        if self.early_stop:
+            return None
+        
+        remaining_visits = self.max_nodes_to_search - self.number_visits
+        avail_children = [node for node in self.children if
+                            node.number_visits + remaining_visits >= self.max_child_visits]
+        
+        # If there's only one child to search, and it's not the best child, then exit
+        # Note: It would be fine to return None regardless of whether the child is best
+        #       so an NN eval isn't triggered but this is LC0's behavior
+        if len(avail_children)==1:
+            child_to_visit = avail_children[0]
+            
+            # Early stop will only happen next time we get to this function
+            self.early_stop = True
+            
+            if self.best_child is None:
+                self.best_child = child_to_visit
+            elif not child_to_visit == self.best_child:
+                return None
+        else:
+            child_to_visit = self.uct_select(avail_children, params)
+        return child_to_visit
+        
+    def add_visit(self, from_child, value, params):
+        """Add a visit to this node
+        
+        Default implementation for non-root-child nodes, which have to handle things
+        differently for early exiting"""
+        super().add_visit(from_child, value, params)
+        
+        if from_child.number_visits > self.max_child_visits:
+            self.max_child_visits = from_child.number_visits
+            self.best_child = from_child
+        elif from_child.number_visits == self.max_child_visits:
+            if self.Q(from_child, params) > self.Q(self.best_child, params):
+                self.best_child = from_child      
 
-def UCT_search(board, num_reads, net=None, C=1.0, alt=False):
-    assert(net != None)
-    root = UCTNode(board, is_root=True, root_remaining_playouts=num_reads)
+
+
+
+def UCT_search(board, num_reads, net, params, alt=False):
+    root = UCTRootNode(board, max_nodes_to_search = num_reads)
     for _ in range(num_reads):
-        leaf, early_exit = root.select_leaf(C)
+        leaf = root.select_leaf(params)
         if not leaf:
             # Early exit when root does not search best child
             break
-        child_priors, value_estimate = net.evaluate(leaf.board)
-        leaf.expand(child_priors)
-        leaf.backup(value_estimate)
-        if early_exit:
-            # Early exit when root does search best child
-            break
-        
-
-    #for m, node in sorted(root.children.items(),
-    #                      key=lambda item: (item[1].number_visits, item[1].Q())):
-    #    node.dump(m, C)
-    return -root.Q(), max(root.children.items(),
-               key=lambda item: (item[1].number_visits, item[1].Q()))
+        child_priors, value_estimate = net.evaluate(leaf.get_board())
+        leaf.expand_and_backup(child_priors, value_estimate, params)
+    
+    return root.Q(child=None, params=params), root.best_child
 
