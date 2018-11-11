@@ -11,9 +11,9 @@ class UCTNode:
     def __init__(self, parent, move, prior, board=None):
         self.board = board
         self.parent = parent  # Optional[UCTNode]
-        self.move = move
+        self.move = move  # uci move
         self.prior = prior  # float
-        self.children = [] # List of UCTNodes... OrderedDict()  # Dict[move, UCTNode]
+        self.children = [] # List of UCTNodes
         self.total_value = 0  # float -- start as network 
         self.number_visits = 0  # int
         # visited_policy is for calculating FPU reduction. It's the sum of policy values
@@ -88,8 +88,7 @@ class UCTNode:
     def add_child(self, move, prior):
         """Add a child to the tree
         
-        UCTRootNode ==> Add UCTRootChildNode
-        UCTRootChildNode ==> Add UCTInteriorNode
+        UCTRootNode ==> Add UCTInteriorNode
         UCTInteriorNode ==> Add UCTInteriorNode"""
         self.children.append(UCTNode(self, move, prior))
     
@@ -167,10 +166,7 @@ class UCTRootNode(UCTNode):
         return child_to_visit
         
     def add_visit(self, from_child, value, params):
-        """Add a visit to this node
-        
-        Default implementation for non-root-child nodes, which have to handle things
-        differently for early exiting"""
+        """Add a visit to this node"""
         super().add_visit(from_child, value, params)
         
         if from_child.number_visits > self.max_child_visits:
@@ -183,7 +179,9 @@ class UCTRootNode(UCTNode):
 
 
 
-def UCT_search(board, num_reads, net, params, alt=False):
+def UCT_search(board, num_reads, net, params):
+    if not isinstance(params, UCTParams):
+        params = UCTParams(*params)
     root = UCTRootNode(board, max_nodes_to_search = num_reads)
     for _ in range(num_reads):
         leaf = root.select_leaf(params)
